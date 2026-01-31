@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const prevBtn = document.getElementById('prevBtn');
   const nextBtn = document.getElementById('nextBtn');
   const pageLabel = document.getElementById('pageLabel');
+  const audioToggle = document.getElementById('audioToggle');
 
   // ---- PageFlip init (keep V13 behaviour) ----
   const pageFlip = new St.PageFlip(bookEl, {
@@ -79,6 +80,51 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let audioUnlocked = false;
   let fadeTimer = null;
+  let userMuted = false;
+  const BASE_VOLUME = 0.35;
+
+  function setAudioButtonState() {
+    if (!audioToggle) return;
+    audioToggle.textContent = userMuted ? '🔇' : '🔊';
+    audioToggle.setAttribute('aria-label', userMuted ? 'Activer la musique' : 'Couper la musique');
+    audioToggle.setAttribute('title', userMuted ? 'Activer la musique' : 'Couper la musique');
+  }
+
+  function stopFade(){
+    if (fadeTimer){
+      clearInterval(fadeTimer);
+      fadeTimer = null;
+    }
+  }
+
+  function applyMuteState(){
+    // iOS Safari can be finicky; combining muted + volume + pause ensures silence.
+    if (userMuted){
+      stopFade();
+      music.muted = true;
+      music.volume = 0;
+      try { music.pause(); } catch(e) {}
+    } else {
+      music.muted = false;
+      // keep volume at current (fade functions set it)
+      if (music.volume === 0) music.volume = BASE_VOLUME;
+    }
+  }
+
+  function toggleMute(e){
+    if (e){
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    userMuted = !userMuted;
+    setAudioButtonState();
+    applyMuteState();
+    // If unmuting, try to resume music if we are in an "open" page view
+    if (!userMuted){
+      // this counts as a user gesture, so play() is allowed on iOS
+      try { music.play(); } catch(_) {}
+    }
+  }
 
   function unlockAudio(){
     if (audioUnlocked) return;
@@ -98,24 +144,42 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener(evt, unlockAudio, { once: true, passive: true })
   );
 
+  // Mute button (must not interfere with page turning)
+  if (audioToggle){
+    setAudioButtonState();
+    const handler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMute();
+    };
+    audioToggle.addEventListener('click', handler, { passive: false });
+    audioToggle.addEventListener('touchend', handler, { passive: false });
+  }
+
   function fadeTo(target, onDone){
-    clearInterval(fadeTimer);
-    const step = (target > music.volume) ? 0.04 : -0.04;
+    stopFade();
+    const clampedTarget = Math.max(0, Math.min(BASE_VOLUME, target));
+    const step = (clampedTarget > music.volume) ? 0.04 : -0.04;
     fadeTimer = setInterval(() => {
-      const v = Math.max(0, Math.min(0.6, music.volume + step));
+      const v = Math.max(0, Math.min(BASE_VOLUME, music.volume + step));
       music.volume = v;
-      const reached = (step > 0) ? (v >= target) : (v <= target);
+      const reached = (step > 0) ? (v >= clampedTarget) : (v <= clampedTarget);
       if (reached){
-        clearInterval(fadeTimer);
+        stopFade();
         if (onDone) onDone();
       }
     }, 120);
   }
 
   function playWithFadeIn(){
+    if (userMuted) {
+      applyMuteState();
+      return;
+    }
     // must be unlocked OR triggered by a gesture (buttons/swipe)
+    music.muted = false;
     music.play().then(() => {
-      fadeTo(0.6);
+      fadeTo(BASE_VOLUME);
     }).catch(() => {
       // try unlock again on next interaction
       audioUnlocked = false;
@@ -124,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function fadeOutAndPause(){
     fadeTo(0, () => {
-      music.pause();
+      try { music.pause(); } catch(e) {}
       // keep currentTime for smooth resume, or reset if you prefer:
       // music.currentTime = 0;
     });
